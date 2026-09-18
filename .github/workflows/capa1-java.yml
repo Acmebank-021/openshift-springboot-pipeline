@@ -153,6 +153,16 @@ jobs:
         if: ${{ inputs.build_tool == 'gradle' }}
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
+      - id: sonar_key
+        shell: bash
+        run: |
+          # SonarCloud auto-importa los repos de GitHub con la clave
+          # "<organizacion>_<repo>" (mismo texto que github.repository, solo
+          # cambiando "/" por "_") - confirmado contra el proyecto real
+          # (Acmebank-021_openshift-springboot-pipeline). Derivarlo de aqui
+          # evita tener que adivinar/actualizar la clave a mano por cada repo.
+          echo "key=$(echo '${{ github.repository }}' | tr '/' '_')" >> "$GITHUB_OUTPUT"
+
       - id: sonar_maven
         if: ${{ inputs.build_tool == 'maven' }}
         continue-on-error: true
@@ -162,7 +172,7 @@ jobs:
           mvn -B compile org.sonarsource.scanner.maven:sonar-maven-plugin:5.7.0.6970:sonar \
             -Dsonar.host.url=https://sonarcloud.io \
             -Dsonar.organization=${{ inputs.sonar_organization }} \
-            -Dsonar.projectKey=${{ inputs.sonar_organization }}_${{ inputs.app }} \
+            -Dsonar.projectKey=${{ steps.sonar_key.outputs.key }} \
             -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
             -Dsonar.qualitygate.wait=true \
             -Dsonar.qualitygate.timeout=300
@@ -175,7 +185,7 @@ jobs:
           gradle build sonar --no-daemon \
             -Dsonar.host.url=https://sonarcloud.io \
             -Dsonar.organization=${{ inputs.sonar_organization }} \
-            -Dsonar.projectKey=${{ inputs.sonar_organization }}_${{ inputs.app }} \
+            -Dsonar.projectKey=${{ steps.sonar_key.outputs.key }} \
             -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
             -Dsonar.qualitygate.wait=true \
             -Dsonar.qualitygate.timeout=300
