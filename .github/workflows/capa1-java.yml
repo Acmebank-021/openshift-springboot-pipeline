@@ -162,7 +162,7 @@ jobs:
           mvn -B compile org.sonarsource.scanner.maven:sonar-maven-plugin:5.7.0.6970:sonar \
             -Dsonar.host.url=https://sonarcloud.io \
             -Dsonar.organization=${{ inputs.sonar_organization }} \
-            -Dsonar.projectKey=${{ inputs.app }} \
+            -Dsonar.projectKey=${{ inputs.sonar_organization }}_${{ inputs.app }} \
             -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
             -Dsonar.qualitygate.wait=true \
             -Dsonar.qualitygate.timeout=300
@@ -175,7 +175,7 @@ jobs:
           gradle build sonar --no-daemon \
             -Dsonar.host.url=https://sonarcloud.io \
             -Dsonar.organization=${{ inputs.sonar_organization }} \
-            -Dsonar.projectKey=${{ inputs.app }} \
+            -Dsonar.projectKey=${{ inputs.sonar_organization }}_${{ inputs.app }} \
             -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
             -Dsonar.qualitygate.wait=true \
             -Dsonar.qualitygate.timeout=300
