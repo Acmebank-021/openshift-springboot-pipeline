@@ -1,0 +1,46 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.3.4'
+    id 'io.spring.dependency-management' version '1.1.6'
+    id 'jacoco'
+    id 'org.sonarqube' version '5.1.0.4882'
+}
+
+group = 'com.acme'
+version = '1.0.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // Gradle 8.9+/9.x ya no trae el launcher de forma implicita con
+    // useJUnitPlatform() - hay que declararlo aparte o falla con
+    // "Failed to load JUnit Platform".
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+// El plugin de Spring Boot genera ademas un jar "-plain" (sin dependencias, no
+// ejecutable) junto al bootJar - con ambos en build/libs/*.jar, un Dockerfile
+// con COPY build/libs/*.jar falla porque hace match con los dos archivos.
+tasks.named('jar') {
+    enabled = false
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = false
+    }
+}

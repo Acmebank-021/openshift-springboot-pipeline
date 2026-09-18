@@ -1,0 +1,22 @@
+name: CI - pedidos (Java/Gradle/OpenShift)
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/capa2-java-gradle.yml
+    with:
+      app: pedidos
+      coverage_min: 50
+      success_density_min: 90
+      rop_enabled: false
+      sonar_organization: '' # TODO: pegar aqui la clave de tu organizacion de SonarCloud
+      container_enabled: true

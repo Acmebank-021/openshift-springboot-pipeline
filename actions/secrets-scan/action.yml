@@ -1,0 +1,19 @@
+name: 'Secrets Scan'
+description: 'Detecta credenciales/tokens hardcodeados con gitleaks (motor OSS, no requiere licencia - la licencia solo aplica al wrapper "gitleaks-action", aqui se invoca el CLI directo via su imagen oficial). Gate generico, no depende de Java ni de Node.'
+
+outputs:
+  report_path:
+    description: 'Ruta al SARIF generado (vacio si no hubo hallazgos que reportar en ese formato)'
+    value: ${{ steps.scan.outputs.report_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: scan
+      shell: bash
+      run: |
+        echo "report_path=gitleaks-report.sarif" >> "$GITHUB_OUTPUT"
+        docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
+          detect --source /repo --no-git \
+          --report-format sarif --report-path /repo/gitleaks-report.sarif \
+          --exit-code 1

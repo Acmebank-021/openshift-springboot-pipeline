@@ -1,0 +1,376 @@
+name: Capa 1 - Java (Maven/Gradle)
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        type: string
+        required: true
+      build_tool:
+        description: "maven o gradle. Misma Capa 1, sin archivo aparte."
+        type: string
+        default: 'maven'
+      java_version:
+        type: string
+        default: '17'
+      coverage_min:
+        type: number
+        default: 70
+      success_density_min:
+        type: number
+        default: 75
+      hard_gating:
+        type: boolean
+        default: true
+      rop_enabled:
+        type: boolean
+        default: false
+      sonar_enabled:
+        type: boolean
+        default: true
+      sonar_organization:
+        description: "Clave de la organizacion en SonarCloud (sonarcloud.io/organizations/<esto>)."
+        type: string
+        default: ''
+      snyk_enabled:
+        type: boolean
+        default: true
+      container_enabled:
+        description: "Construye y publica una imagen de contenedor a partir del mismo jar/war - solo para apps con destino OpenShift."
+        type: boolean
+        default: false
+    outputs:
+      artifact_id:
+        value: ${{ jobs.consolidate.outputs.artifact_id }}
+      verdict:
+        value: ${{ jobs.consolidate.outputs.verdict }}
+
+permissions:
+  contents: read
+  packages: write
+
+# Secretos: a proposito NO hay bloque "secrets:" aqui (ni "secrets: inherit").
+# Los jobs que de verdad necesitan un secreto declaran su propio "environment:"
+# (ver sonar-analysis, snyk-analysis, consolidate) - GitHub resuelve secrets.X
+# contra ESE Environment sin que Capa 2/3 tengan que declarar ni pasar nada.
+# Configurar el Environment "ci-secrets" (Settings > Environments) con
+# SONAR_TOKEN, SNYK_TOKEN y ROP_LAB_TOKEN reales antes de habilitar cada cosa.
+
+jobs:
+  build-and-test:
+    # Fusionado a proposito (antes eran "build" y "unit-test" separados):
+    # unit-test siempre esperaba a build (needs: build) y ademas descargaba su
+    # jar - nunca corrian en paralelo de verdad, solo pagabamos dos arranques
+    # de maquina (checkout + instalar JDK) y una ida-vuelta de artifact en vez
+    # de una sola. Ver el hallazgo de costo de GitHub Actions discutido con el
+    # usuario (facturacion es por minutos de CADA job, no por el reloj total).
+    name: Build & Unit Tests
+    runs-on: ubuntu-latest
+    outputs:
+      started_at: ${{ steps.started_at.outputs.value }}
+      coverage: ${{ steps.gate.outputs.coverage }}
+      success_density: ${{ steps.gate.outputs.success_density }}
+      status: ${{ steps.gate.outputs.status }}
+    steps:
+      - id: started_at
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./actions/setup-toolchain
+        with:
+          java_version: ${{ inputs.java_version }}
+          build_tool: ${{ inputs.build_tool }}
+      - name: Setup Gradle (version fija - no depende de cual venga preinstalada en el runner)
+        if: ${{ inputs.build_tool == 'gradle' }}
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - name: Compile and package (Maven)
+        if: ${{ inputs.build_tool == 'maven' }}
+        run: mvn -B -DskipTests package
+      - name: Compile and package (Gradle)
+        if: ${{ inputs.build_tool == 'gradle' }}
+        run: gradle build -x test -x jacocoTestReport --no-daemon
+
+      - name: Run tests (Maven)
+        if: ${{ inputs.build_tool == 'maven' }}
+        run: mvn -B test -Dmaven.test.failure.ignore=true
+      - name: Run tests (Gradle)
+        if: ${{ inputs.build_tool == 'gradle' }}
+        run: gradle test jacocoTestReport --no-daemon || true
+
+      - name: Quality gate
+        id: gate
+        if: always()
+        uses: ./actions/quality-gate
+        with:
+          surefire_path: ${{ inputs.build_tool == 'gradle' && 'build/test-results/test' || 'target/surefire-reports' }}
+          jacoco_xml_path: ${{ inputs.build_tool == 'gradle' && 'build/reports/jacoco/test/jacocoTestReport.xml' || 'target/site/jacoco/jacoco.xml' }}
+          coverage_min: ${{ inputs.coverage_min }}
+          success_density_min: ${{ inputs.success_density_min }}
+          hard_gating: ${{ inputs.hard_gating }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-jar-${{ inputs.app }}
+          path: |
+            target/*.jar
+            build/libs/*.jar
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: test-reports-${{ inputs.app }}
+          path: |
+            target/surefire-reports
+            target/site/jacoco
+            build/test-results/test
+            build/reports/jacoco/test
+          retention-days: 1
+          if-no-files-found: ignore
+
+  sonar-analysis:
+    name: Sonar Analysis (SonarCloud real)
+    needs: build-and-test
+    if: ${{ inputs.sonar_enabled }}
+    runs-on: ubuntu-latest
+    # Ya NO se levanta un SonarQube local en Docker (asi corria antes en el
+    # laboratorio) - SonarCloud es un servidor real, persistente, igual que
+    # el sonarqube04.nam.nsroot.net que ya vimos en la evidencia AS-IS del
+    # banco. Eso elimina el arranque de contenedor + rotar password + generar
+    # token a mano, que era el costo mas alto de este job.
+    environment: ci-secrets
+    outputs:
+      status: ${{ steps.sonar_status.outputs.status }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0 # Sonar quiere historial completo para "new code" / blame
+      - uses: ./actions/setup-toolchain
+        with:
+          java_version: ${{ inputs.java_version }}
+          build_tool: ${{ inputs.build_tool }}
+      - name: Setup Gradle (version fija - no depende de cual venga preinstalada en el runner)
+        if: ${{ inputs.build_tool == 'gradle' }}
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+
+      - id: sonar_maven
+        if: ${{ inputs.build_tool == 'maven' }}
+        continue-on-error: true
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          mvn -B compile org.sonarsource.scanner.maven:sonar-maven-plugin:5.7.0.6970:sonar \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.organization=${{ inputs.sonar_organization }} \
+            -Dsonar.projectKey=${{ inputs.app }} \
+            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.qualitygate.wait=true \
+            -Dsonar.qualitygate.timeout=300
+      - id: sonar_gradle
+        if: ${{ inputs.build_tool == 'gradle' }}
+        continue-on-error: true
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          gradle build sonar --no-daemon \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.organization=${{ inputs.sonar_organization }} \
+            -Dsonar.projectKey=${{ inputs.app }} \
+            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.qualitygate.wait=true \
+            -Dsonar.qualitygate.timeout=300
+
+      - id: sonar_status
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ inputs.build_tool }}" = "gradle" ]; then
+            echo "status=${{ steps.sonar_gradle.outcome }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=${{ steps.sonar_maven.outcome }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  snyk-analysis:
+    name: Dependency Scan (Trivy + Snyk SCA)
+    needs: build-and-test
+    if: ${{ inputs.snyk_enabled }}
+    runs-on: ubuntu-latest
+    environment: ci-secrets
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Trivy filesystem scan (reporte SARIF completo, no bloquea)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: security-findings-${{ inputs.app }}
+          path: trivy-results.sarif
+          retention-days: 1
+      - name: Trivy gate (falla el job si hay CRITICAL sin excepcion)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL'
+      - name: Snyk SCA (real, informativo)
+        if: ${{ inputs.build_tool == 'maven' }}
+        uses: snyk/actions/maven@9adf32b1121593767fc3c057af55b55db032dc04 # v1.0.0
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      - name: Snyk SCA (real, informativo)
+        if: ${{ inputs.build_tool == 'gradle' }}
+        uses: snyk/actions/gradle@9adf32b1121593767fc3c057af55b55db032dc04 # v1.0.0
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  secrets-scan:
+    name: Secrets Scan (gitleaks - unico gate sin excepcion)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./actions/secrets-scan
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: secrets-findings-${{ inputs.app }}
+          path: gitleaks-report.sarif
+          retention-days: 1
+          if-no-files-found: ignore
+
+  publish-artifact:
+    name: Publish Artifact
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Placeholder (sin contenedor - apps con destino Tomcat/WAS/WebLogic)
+        if: ${{ !inputs.container_enabled }}
+        run: echo "pendiente Sprint 3 - publicacion inmutable con attestation"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: ${{ inputs.container_enabled }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ inputs.container_enabled }}
+        with:
+          name: build-jar-${{ inputs.app }}
+          merge-multiple: true
+
+      - id: meta
+        if: ${{ inputs.container_enabled }}
+        shell: bash
+        run: |
+          image=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        if: ${{ inputs.container_enabled }}
+
+      - name: "Login a GitHub Container Registry (simula Artifactory - JFrog real pide tarjeta, swap a REGISTRY_TOKEN cuando este disponible)"
+        if: ${{ inputs.container_enabled }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: push
+        if: ${{ inputs.container_enabled }}
+        name: Build & push imagen de contenedor (Java - OpenShift)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.image }}:${{ github.sha }}
+
+  consolidate:
+    name: Consolidate
+    needs: [build-and-test, sonar-analysis, snyk-analysis, secrets-scan, publish-artifact]
+    if: always()
+    runs-on: ubuntu-latest
+    environment: ci-secrets
+    outputs:
+      artifact_id: ${{ steps.decide.outputs.artifact_id }}
+      verdict: ${{ steps.decide.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: decide
+        uses: ./actions/consolidate-verdict
+        with:
+          app: ${{ inputs.app }}
+          build_result: ${{ needs.build-and-test.result }}
+          test_result: ${{ needs.build-and-test.result }}
+          gate_status: ${{ needs.build-and-test.outputs.status }}
+          gate_coverage: ${{ needs.build-and-test.outputs.coverage }}
+          gate_density: ${{ needs.build-and-test.outputs.success_density }}
+          secrets_result: ${{ needs.secrets-scan.result }}
+          sonar_result: ${{ needs.sonar-analysis.outputs.status }}
+          sonar_enabled: ${{ inputs.sonar_enabled }}
+          sonar_blocking: 'false'
+          snyk_result: ${{ needs.snyk-analysis.result }}
+          snyk_enabled: ${{ inputs.snyk_enabled }}
+          rop_enabled: ${{ inputs.rop_enabled }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ inputs.snyk_enabled }}
+        continue-on-error: true
+        with:
+          name: security-findings-${{ inputs.app }}
+
+      - id: rop_payload
+        uses: ./actions/build-rop-payload
+        with:
+          app: ${{ inputs.app }}
+          verdict: ${{ steps.decide.outputs.verdict }}
+          artifact_id: ${{ steps.decide.outputs.artifact_id }}
+          build_result: ${{ needs.build-and-test.result }}
+          test_result: ${{ needs.build-and-test.result }}
+          gate_status: ${{ needs.build-and-test.outputs.status }}
+          gate_coverage: ${{ needs.build-and-test.outputs.coverage }}
+          gate_density: ${{ needs.build-and-test.outputs.success_density }}
+          coverage_min: ${{ inputs.coverage_min }}
+          success_density_min: ${{ inputs.success_density_min }}
+          hard_gating: ${{ inputs.hard_gating }}
+          secrets_result: ${{ needs.secrets-scan.result }}
+          sonar_result: ${{ needs.sonar-analysis.outputs.status }}
+          sonar_enabled: ${{ inputs.sonar_enabled }}
+          sonar_blocking: 'false'
+          snyk_result: ${{ needs.snyk-analysis.result }}
+          snyk_enabled: ${{ inputs.snyk_enabled }}
+          sarif_path: trivy-results.sarif
+          started_at: ${{ needs.build-and-test.outputs.started_at }}
+          container_image: ${{ needs.publish-artifact.outputs.image }}
+          container_digest: ${{ needs.publish-artifact.outputs.digest }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rop-payload-${{ inputs.app }}
+          path: rop-payload.json
+          retention-days: 7
+
+      - name: Dispatch a rop-mock (handoff real GHA -> ROP)
+        if: ${{ inputs.rop_enabled }}
+        env:
+          GH_TOKEN: ${{ secrets.ROP_LAB_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::rop_enabled=true pero no hay ROP_LAB_TOKEN configurado. No se envia el handoff a rop-mock."
+            exit 0
+          fi
+          payload=$(jq -c '{event_type: "gha-verdict", client_payload: .}' rop-payload.json)
+          echo "$payload" | gh api repos/Acmebank-021/rop-mock/dispatches --input -
+          echo "Handoff enviado a rop-mock."

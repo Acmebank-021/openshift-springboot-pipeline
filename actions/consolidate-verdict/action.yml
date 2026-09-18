@@ -1,0 +1,113 @@
+name: 'Consolidate Verdict'
+description: 'Decide el veredicto final (pass/fail) y arma el artifact_id, a partir de los resultados de los jobs previos - generico entre stacks/lenguajes, no depende de Java ni de Node'
+
+inputs:
+  app:
+    required: true
+  build_result:
+    required: true
+  test_result:
+    required: true
+  gate_status:
+    required: false
+    default: ''
+  gate_coverage:
+    required: false
+    default: ''
+  gate_density:
+    required: false
+    default: ''
+  sonar_result:
+    required: false
+    default: ''
+  sonar_enabled:
+    required: false
+    default: 'true'
+  sonar_blocking:
+    description: 'Si es false (default), un Sonar Quality Gate en rojo se reporta pero NO tumba el veredicto - decision documentada: Sonar es un gate informativo, el unico gate sin excepcion es secrets-scan (ver hallazgo AS-IS: java_version_check y Sonar nunca bloquean en Unify/Jenkins, secrets-scan si).'
+    required: false
+    default: 'false'
+  snyk_result:
+    required: false
+    default: ''
+  snyk_enabled:
+    required: false
+    default: 'true'
+  secrets_result:
+    description: 'Resultado del job de secrets-scan (gitleaks). Vacio si el stack todavia no lo tiene cableado - en ese caso no participa del veredicto, para no romper stacks que aun no lo implementan.'
+    required: false
+    default: ''
+  rop_enabled:
+    required: false
+    default: 'false'
+
+outputs:
+  verdict:
+    value: ${{ steps.decide.outputs.verdict }}
+  artifact_id:
+    value: ${{ steps.decide.outputs.artifact_id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: decide
+      shell: bash
+      run: |
+        verdict=pass
+        reasons=()
+
+        if [ "${{ inputs.build_result }}" != "success" ]; then
+          verdict=fail
+          reasons+=("build=${{ inputs.build_result }}")
+        fi
+
+        if [ "${{ inputs.test_result }}" != "success" ]; then
+          verdict=fail
+          reasons+=("unit-test=${{ inputs.test_result }}")
+        fi
+
+        # secrets-scan es el unico gate SIN excepcion posible (ni "enabled" ni
+        # "blocking" para desactivarlo): si corrio y no fue "success", tumba el
+        # veredicto siempre. Si vino vacio es que el stack todavia no tiene el
+        # job cableado - no participa, para no romper stacks que aun no lo migran.
+        if [ -n "${{ inputs.secrets_result }}" ] && [ "${{ inputs.secrets_result }}" != "success" ]; then
+          verdict=fail
+          reasons+=("secrets-scan=${{ inputs.secrets_result }}")
+        fi
+
+        # snyk (Trivy) solo cuenta para el veredicto si esta habilitado: un
+        # scanner deshabilitado por excepcion documentada (snyk_enabled=false)
+        # no debe bloquear, pero uno habilitado que no termino en "success"
+        # (hallazgos criticos, o el job mismo fallo) si debe hacerlo.
+        if [ "${{ inputs.snyk_enabled }}" = "true" ] && [ "${{ inputs.snyk_result }}" != "success" ]; then
+          verdict=fail
+          reasons+=("snyk-analysis=${{ inputs.snyk_result }}")
+        fi
+
+        # sonar es informativo por default (sonar_blocking=false): un Quality
+        # Gate en rojo se reporta con ::warning:: pero no tumba el veredicto,
+        # salvo que se decida explicitamente lo contrario para un app puntual.
+        if [ "${{ inputs.sonar_enabled }}" = "true" ] && [ "${{ inputs.sonar_result }}" != "success" ]; then
+          if [ "${{ inputs.sonar_blocking }}" = "true" ]; then
+            verdict=fail
+            reasons+=("sonar-analysis=${{ inputs.sonar_result }}")
+          else
+            echo "::warning::sonar-analysis=${{ inputs.sonar_result }} (informativo, sonar_blocking=false - no tumba el veredicto)"
+          fi
+        fi
+
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        echo "artifact_id=${{ inputs.app }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+        echo "== Consolidation =="
+        echo "build: ${{ inputs.build_result }}"
+        echo "unit-test (job, incluye el hard gate si esta activo): ${{ inputs.test_result }}"
+        echo "quality-gate: status=${{ inputs.gate_status }} cobertura=${{ inputs.gate_coverage }}% densidad=${{ inputs.gate_density }}%"
+        echo "secrets-scan: ${{ inputs.secrets_result }} (unico gate sin excepcion)"
+        echo "sonar-analysis: ${{ inputs.sonar_result }} (habilitado=${{ inputs.sonar_enabled }}, blocking=${{ inputs.sonar_blocking }})"
+        echo "snyk-analysis: ${{ inputs.snyk_result }} (habilitado=${{ inputs.snyk_enabled }})"
+        echo "Veredicto final: $verdict"
+        if [ "$verdict" = "fail" ]; then
+          echo "::error::Veredicto fail. Motivos: ${reasons[*]}"
+        fi
+        echo "(rop_enabled=${{ inputs.rop_enabled }})"

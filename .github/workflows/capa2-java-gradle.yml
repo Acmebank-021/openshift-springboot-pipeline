@@ -1,0 +1,91 @@
+name: Capa 2 - Java/Gradle Stack
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        type: string
+        required: true
+      java_version:
+        type: string
+        default: '17'
+      coverage_min:
+        type: number
+        default: 70
+      success_density_min:
+        type: number
+        default: 75
+      hard_gating:
+        type: boolean
+        default: true
+      rop_enabled:
+        type: boolean
+        default: false
+      sonar_enabled:
+        type: boolean
+        default: true
+      sonar_organization:
+        type: string
+        default: ''
+      snyk_enabled:
+        type: boolean
+        default: true
+      container_enabled:
+        description: "Java - OpenShift: construye y publica una imagen de contenedor real. Default false."
+        type: boolean
+        default: false
+    outputs:
+      artifact_id:
+        value: ${{ jobs.ci.outputs.artifact_id }}
+      verdict:
+        value: ${{ jobs.ci.outputs.verdict }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  validate-catalog:
+    name: Validate JDK catalog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check java_version against the approved catalog
+        shell: bash
+        run: |
+          approved="17 21"
+
+          declare -A exceptions=(
+          )
+
+          version="${{ inputs.java_version }}"
+          app="${{ inputs.app }}"
+
+          if echo "$approved" | grep -qw "$version"; then
+            echo "JDK $version esta en el catalogo aprobado ($approved) para '$app'."
+            exit 0
+          fi
+
+          if [ "${exceptions[$app]:-}" = "$version" ]; then
+            echo "::warning::JDK $version no esta en el catalogo aprobado ($approved), pero '$app' tiene una excepcion registrada explicitamente (legacy). Debe revisarse en cada release."
+            exit 0
+          fi
+
+          echo "::error::JDK $version no esta aprobado para '$app' y no tiene excepcion registrada. Catalogo aprobado: $approved"
+          exit 1
+
+  ci:
+    name: CI (Capa 1, parametrizada para Gradle)
+    needs: validate-catalog
+    uses: ./.github/workflows/capa1-java.yml
+    with:
+      app: ${{ inputs.app }}
+      build_tool: gradle
+      java_version: ${{ inputs.java_version }}
+      coverage_min: ${{ inputs.coverage_min }}
+      success_density_min: ${{ inputs.success_density_min }}
+      hard_gating: ${{ inputs.hard_gating }}
+      rop_enabled: ${{ inputs.rop_enabled }}
+      sonar_enabled: ${{ inputs.sonar_enabled }}
+      sonar_organization: ${{ inputs.sonar_organization }}
+      snyk_enabled: ${{ inputs.snyk_enabled }}
+      container_enabled: ${{ inputs.container_enabled }}

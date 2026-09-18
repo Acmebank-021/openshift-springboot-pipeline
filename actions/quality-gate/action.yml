@@ -1,0 +1,46 @@
+name: 'Quality Gate'
+description: 'Lee reportes de Surefire y JaCoCo, calcula cobertura y densidad de exito, y decide pass/fail'
+
+inputs:
+  surefire_path:
+    description: 'Carpeta con los reportes XML de Surefire'
+    required: false
+    default: 'target/surefire-reports'
+  jacoco_xml_path:
+    description: 'Ruta al jacoco.xml generado por el reporte de JaCoCo'
+    required: false
+    default: 'target/site/jacoco/jacoco.xml'
+  coverage_min:
+    description: 'Cobertura minima de lineas requerida (%)'
+    required: true
+  success_density_min:
+    description: 'Porcentaje minimo de pruebas exitosas requerido'
+    required: true
+  hard_gating:
+    description: 'Si es true, el gate en fail bloquea (exit 1). Si es false, solo reporta.'
+    required: false
+    default: 'true'
+
+outputs:
+  coverage:
+    description: 'Cobertura de lineas medida (%)'
+    value: ${{ steps.compute.outputs.coverage }}
+  success_density:
+    description: 'Densidad de exito de pruebas medida (%)'
+    value: ${{ steps.compute.outputs.success_density }}
+  status:
+    description: 'pass o fail'
+    value: ${{ steps.compute.outputs.status }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: compute
+      shell: bash
+      run: |
+        python3 "${{ github.action_path }}/compute_gate.py" \
+          "${{ inputs.surefire_path }}" \
+          "${{ inputs.jacoco_xml_path }}" \
+          "${{ inputs.coverage_min }}" \
+          "${{ inputs.success_density_min }}" \
+          "${{ inputs.hard_gating }}"

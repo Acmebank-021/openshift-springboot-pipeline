@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acmebank-021.internal/schemas/rop-payload.v0.json",
+  "title": "GHA -> ROP handoff payload (v0)",
+  "description": "Contrato del Consolidation Job: unico punto de entrega del CI (GitHub Actions) al CD (ROP). Todo campo aqui es lo unico que ROP puede asumir que existe.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "correlation_id", "source", "artifact", "gates", "findings", "timings", "verdict"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^0\\.\\d+\\.\\d+$",
+      "description": "Semver del contrato. Mientras sea 0.x.x se asume inestable a proposito."
+    },
+    "correlation_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Generado por el Consolidation Job. ROP lo devuelve tal cual en cualquier respuesta/telemetria relacionada."
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["org", "repo", "commit_sha", "ref", "run_id"],
+      "properties": {
+        "org": { "type": "string" },
+        "repo": { "type": "string" },
+        "commit_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "ref": { "type": "string" },
+        "run_id": { "type": "string" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "coordinates", "version", "sha256", "registry_url", "attestation_url"],
+      "properties": {
+        "id": { "type": "string", "description": "Identificador estable que ROP usa para promocionar el mismo binario entre ambientes, sin rebuild." },
+        "coordinates": { "type": "string", "description": "Ej. com.acme:catalogo:1.4.2+a1b2c3d" },
+        "version": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "registry_url": { "type": "string", "format": "uri" },
+        "attestation_url": { "type": "string", "format": "uri" }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value", "threshold", "operator", "status", "blocking"],
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "number" },
+          "threshold": { "type": "number" },
+          "operator": { "type": "string", "enum": [">=", "<=", ">", "<", "=="] },
+          "status": { "type": "string", "enum": ["pass", "fail"] },
+          "blocking": { "type": "boolean", "description": "Si es false, el gate se reporta pero no puede tumbar el verdict global." }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Hallazgos de seguridad/calidad ya normalizados a SARIF y deduplicados por fingerprint antes de llegar aqui.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fingerprint", "tool", "rule_id", "severity", "path", "status"],
+        "properties": {
+          "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "sha256(rule_id + normalized_path + cwe + snippet_hash). Nunca incluye numero de linea." },
+          "tool": { "type": "string" },
+          "rule_id": { "type": "string" },
+          "cwe": { "type": "string" },
+          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low", "info"] },
+          "path": { "type": "string" },
+          "status": { "type": "string", "enum": ["open", "suppressed", "fixed"] }
+        }
+      }
+    },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["queued_at", "started_at", "finished_at", "duration_s"],
+      "properties": {
+        "queued_at": { "type": "string", "format": "date-time" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": "string", "format": "date-time" },
+        "duration_s": { "type": "number", "minimum": 0 }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail"],
+      "description": "AND logico de todos los gates con blocking=true. Si algun gate blocking esta en fail, verdict es fail."
+    }
+  }
+}

@@ -1,0 +1,116 @@
+name: 'Build ROP Payload'
+description: 'Arma el JSON de handoff GHA->ROP segun schemas/rop-payload.v0.json (gates, findings de Trivy deduplicados por fingerprint, timings), lo valida contra ese mismo schema y lo deja en rop-payload.json'
+
+inputs:
+  app:
+    required: true
+  verdict:
+    required: true
+  artifact_id:
+    required: true
+  build_result:
+    required: true
+  test_result:
+    required: true
+  gate_status:
+    required: false
+    default: ''
+  gate_coverage:
+    required: false
+    default: ''
+  gate_density:
+    required: false
+    default: ''
+  coverage_min:
+    required: false
+    default: ''
+  success_density_min:
+    required: false
+    default: ''
+  hard_gating:
+    required: false
+    default: 'true'
+  sonar_result:
+    required: false
+    default: ''
+  sonar_enabled:
+    required: false
+    default: 'true'
+  sonar_blocking:
+    description: 'Mismo valor que se le paso a consolidate-verdict - determina si el gate sonar-quality-gate se marca blocking:true/false en el payload.'
+    required: false
+    default: 'false'
+  snyk_result:
+    required: false
+    default: ''
+  snyk_enabled:
+    required: false
+    default: 'true'
+  secrets_result:
+    description: 'Resultado del job de secrets-scan (gitleaks). Vacio si el stack no lo tiene cableado todavia.'
+    required: false
+    default: ''
+  container_image:
+    description: 'Imagen de contenedor real (owner/repo, sin tag) si container_enabled=true en la Capa 1. Vacio si el app no publica contenedor (destino Tomcat/WAS/WebLogic).'
+    required: false
+    default: ''
+  container_digest:
+    description: 'Digest real (sha256:...) de la imagen publicada. Vacio si no aplica.'
+    required: false
+    default: ''
+  sarif_path:
+    description: 'Ruta al trivy-results.sarif ya descargado, si snyk_enabled=true'
+    required: false
+    default: ''
+  started_at:
+    description: 'Timestamp ISO8601 UTC de cuando arranco el job de build'
+    required: false
+    default: ''
+
+outputs:
+  payload_path:
+    value: ${{ steps.build.outputs.payload_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: build
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        VERDICT: ${{ inputs.verdict }}
+        ARTIFACT_ID: ${{ inputs.artifact_id }}
+        BUILD_RESULT: ${{ inputs.build_result }}
+        TEST_RESULT: ${{ inputs.test_result }}
+        GATE_STATUS: ${{ inputs.gate_status }}
+        GATE_COVERAGE: ${{ inputs.gate_coverage }}
+        GATE_DENSITY: ${{ inputs.gate_density }}
+        COVERAGE_MIN: ${{ inputs.coverage_min }}
+        SUCCESS_DENSITY_MIN: ${{ inputs.success_density_min }}
+        HARD_GATING: ${{ inputs.hard_gating }}
+        SONAR_RESULT: ${{ inputs.sonar_result }}
+        SONAR_ENABLED: ${{ inputs.sonar_enabled }}
+        SONAR_BLOCKING: ${{ inputs.sonar_blocking }}
+        SNYK_RESULT: ${{ inputs.snyk_result }}
+        SNYK_ENABLED: ${{ inputs.snyk_enabled }}
+        SECRETS_RESULT: ${{ inputs.secrets_result }}
+        SARIF_PATH: ${{ inputs.sarif_path }}
+        STARTED_AT: ${{ inputs.started_at }}
+        CONTAINER_IMAGE: ${{ inputs.container_image }}
+        CONTAINER_DIGEST: ${{ inputs.container_digest }}
+        ORG: ${{ github.repository_owner }}
+        REPO_FULL: ${{ github.repository }}
+        COMMIT_SHA: ${{ github.sha }}
+        REF: ${{ github.ref }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        python3 "${{ github.action_path }}/build_payload.py"
+        echo "payload_path=rop-payload.json" >> "$GITHUB_OUTPUT"
+
+    - name: Validar el payload contra el contrato (schemas/rop-payload.v0.json)
+      shell: bash
+      run: |
+        pip install --quiet "jsonschema[format]"
+        python3 "${{ github.action_path }}/validate_payload.py" \
+          "${{ github.action_path }}/../../schemas/rop-payload.v0.json" \
+          rop-payload.json

@@ -1,0 +1,28 @@
+name: 'Setup Toolchain'
+description: 'Instala el JDK (Temurin) y activa cache del build tool - punto unico de mantenimiento del toolchain de Capa 1'
+
+inputs:
+  java_version:
+    description: 'Version de JDK a instalar'
+    required: false
+    default: '17'
+  build_tool:
+    description: 'maven, gradle o ant. actions/setup-java solo sabe cachear maven/gradle/sbt nativamente - Ant no es un valor valido para su input "cache" (fallaria la validacion interna de la action), asi que para ant se desactiva ese cache aqui mismo; el cache del repositorio de Ivy se maneja aparte, en ci-reusable-java-ant.yml.'
+    required: false
+    default: 'maven'
+
+runs:
+  using: 'composite'
+  steps:
+    - id: effective_cache
+      shell: bash
+      run: |
+        case "${{ inputs.build_tool }}" in
+          maven|gradle) echo "value=${{ inputs.build_tool }}" >> "$GITHUB_OUTPUT" ;;
+          *) echo "value=" >> "$GITHUB_OUTPUT" ;;
+        esac
+    - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java_version }}
+        cache: ${{ steps.effective_cache.outputs.value }}
