@@ -18,5 +18,5 @@ jobs:
       coverage_min: 50
       success_density_min: 90
       rop_enabled: false
-      sonar_organization: '' # TODO: pegar aqui la clave de tu organizacion de SonarCloud
+      sonar_organization: 'acmebank-021'
       container_enabled: true
