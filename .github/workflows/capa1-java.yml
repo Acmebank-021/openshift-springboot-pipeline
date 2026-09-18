@@ -153,6 +153,16 @@ jobs:
         if: ${{ inputs.build_tool == 'gradle' }}
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
+      - name: "DEBUG TEMPORAL: confirmar si SONAR_TOKEN llega al job (sin imprimir el valor)"
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "::error::SONAR_TOKEN llego VACIO a este job"
+          else
+            echo "SONAR_TOKEN llego con ${#SONAR_TOKEN} caracteres"
+          fi
+
       - id: sonar_key
         shell: bash
         run: |
