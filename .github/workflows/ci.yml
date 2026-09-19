@@ -13,6 +13,14 @@ permissions:
 jobs:
   ci:
     uses: ./.github/workflows/capa2-java-gradle.yml
+    # Necesario para que los secretos de Environment (SONAR_TOKEN, etc.)
+    # declarados en Capa 1 crucen esta llamada - "environment:" en el job de
+    # Capa 1 NO es suficiente por si solo dentro de una cadena de workflows
+    # reutilizables anidados (limitacion real y documentada de GitHub Actions,
+    # ver actions/runner#4453). No expone secretos de mas: cada job de Capa 1
+    # solo consume lo que el explicitamente referencia via su propio
+    # "environment:" o "secrets.X".
+    secrets: inherit
     with:
       app: pedidos
       coverage_min: 50
